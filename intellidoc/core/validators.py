@@ -3,10 +3,10 @@ import mimetypes
 from dataclasses import dataclass
 from typing import List
 
-from localknow.config import settings
+from intellidoc.config import settings
 
 
-SUPPORTED_EXTS = {".pdf", ".txt", ".md", ".csv", ".docx"}
+SUPPORTED_EXTS = {".pdf", ".txt", ".md", ".csv", ".docx", ".png", ".jpg", ".jpeg"}
 
 
 @dataclass

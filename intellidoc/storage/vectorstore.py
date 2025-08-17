@@ -3,7 +3,7 @@ import torch
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
-from localknow.config import settings
+from intellidoc.config import settings
 
 
 class VectorStore:

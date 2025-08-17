@@ -1,22 +1,45 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 from typing import Dict, Any
 import json
+import shutil
+from pathlib import Path
 
-from localknow.pipeline.orchestrator import main as run_pipeline
-from localknow.utils.monitor import monitor
-from localknow.config import settings
+from intellidoc.pipeline.orchestrator import main as run_pipeline, process_document_path
+from intellidoc.utils.monitor import monitor
+from intellidoc.config import settings
 
 # Start the system monitor
 monitor.start()
 
-app = FastAPI(title="LocalKnow API")
+app = FastAPI(title="IntelliDoc Extractor API")
 
 # In-memory store for job results
 results: Dict[str, Any] = {}
 
 class IngestRequest(BaseModel):
     input_dir: str
+
+TEMP_DIR = Path("temp_uploads")
+TEMP_DIR.mkdir(exist_ok=True)
+
+@app.post("/extract")
+async def extract(file: UploadFile = File(...)):
+    """Extracts structured data from a single uploaded document."""
+    temp_path = TEMP_DIR / file.filename
+    try:
+        with temp_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Run single document processing
+        result = process_document_path(str(temp_path))
+        return result
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    finally:
+        # Clean up the temporary file
+        if temp_path.exists():
+            temp_path.unlink()
 
 @app.get("/health")
 async def health():

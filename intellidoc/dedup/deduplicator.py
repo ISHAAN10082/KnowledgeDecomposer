@@ -5,9 +5,9 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from localknow.config import settings
-from localknow.types import Document
-from localknow.storage.vectorstore import VectorStore
+from intellidoc.config import settings
+from intellidoc.types import Document
+from intellidoc.storage.vectorstore import VectorStore
 
 
 class AdvancedContentDeduplicator:

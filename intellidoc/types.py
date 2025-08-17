@@ -13,23 +13,10 @@ class Document:
 @dataclass
 class Concept:
     name: str
+    type: str # E.g., method, dataset, model, metric
     description: str
     confidence: float
     sources: List[str]
-
-
-@dataclass
-class Principle:
-    name: str
-    rationale: str
-    confidence: float
-
-
-@dataclass
-class Controversy:
-    topic: str
-    viewpoints: List[str]
-    confidence: float
 
 
 @dataclass

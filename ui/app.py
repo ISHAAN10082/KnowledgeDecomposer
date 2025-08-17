@@ -1,58 +1,79 @@
 import gradio as gr
 import requests
-import time
 import json
 
-from localknow.config import settings
+from intellidoc.config import settings
 
 API_URL = f"http://{settings.api_host}:{settings.api_port}"
 
-def run_ingestion(input_dir):
-    """Triggers the ingestion pipeline and polls for results."""
+def process_document(file):
+    """Sends the uploaded file to the backend for processing and returns the results."""
+    if file is None:
+        return None, "Please upload a document.", None
+
     try:
-        start_response = requests.post(f"{API_URL}/ingest", json={"input_dir": input_dir}, timeout=10)
-        start_data = start_response.json()
+        files = {'file': (file.name, open(file.name, 'rb'))}
+        response = requests.post(f"{API_URL}/extract", files=files, timeout=300)
+        
+        if response.status_code == 200:
+            result_data = response.json()
+            
+            image_output = file.name
+            
+            extracted_json = result_data.get("extracted_data")
+            if not extracted_json:
+                 return image_output, "Could not extract any data.", "Extraction failed or returned no data."
 
-        if start_response.status_code == 200 and start_data.get("job_id"):
-            job_id = start_data["job_id"]
-            yield "Pipeline started... polling for results."
+            json_output = json.dumps(extracted_json.get("extracted_data", {}), indent=2)
+            
+            justification_data = extracted_json.get("field_justifications", {})
+            confidence = extracted_json.get('confidence_score', 0)
+            
+            justification = f"**Overall Confidence Score:** {confidence:.2f}\n\n---"
+            justification += "\n\n"
+            justification += "\n".join([f"- **{k.replace('_', ' ').title()}**: {v}" for k, v in justification_data.items()])
 
-            for _ in range(300):  # Poll for up to 5 minutes
-                time.sleep(5)
-                result_response = requests.get(f"{API_URL}/results/{job_id}", timeout=10)
-                result_data = result_response.json()
-
-                if result_data.get("status") != "running":
-                    # Format the final report for display
-                    report_str = json.dumps(result_data, indent=2)
-                    yield report_str
-                    return
-                else:
-                    yield "Still running..."
-            yield "Pipeline timed out."
+            return image_output, json_output, justification
         else:
-            yield f"Error starting pipeline: {start_data.get('detail', 'Unknown error')}"
+            return None, f"Error: {response.text}", None
 
     except requests.RequestException as e:
-        yield f"API request failed: {e}"
-
+        return None, f"API request failed: {e}", None
+    except Exception as e:
+        return None, f"An error occurred: {e}", None
 
 def main():
-    with gr.Blocks(title="LocalKnow", theme=gr.themes.Soft()) as demo:
-        gr.Markdown("# LocalKnow: Knowledge Decomposition Engine")
+    with gr.Blocks(title="IntelliDoc Extractor", theme=gr.themes.Soft()) as demo:
+        gr.Markdown(
+            """
+            # IntelliDoc Extractor: From Unstructured to Actionable Data
+            Upload an invoice (PDF or image) to see how our vision-enabled, self-correcting AI pipeline extracts structured data in real-time.
+            """
+        )
+        
+        with gr.Row():
+            upload_button = gr.File(label="Upload Invoice", file_types=["pdf", "image"])
+        
         with gr.Row():
             with gr.Column(scale=1):
-                input_dir = gr.Textbox(label="Input Directory", value="./data")
-                run_btn = gr.Button("Run Pipeline", variant="primary")
-            with gr.Column(scale=2):
-                output_status = gr.Code(label="Pipeline Report", language="json", interactive=False)
+                gr.Markdown("## Original Document")
+                image_display = gr.Image(type="filepath", label="Document View")
+            with gr.Column(scale=1):
+                gr.Markdown("## Extracted Data")
+                json_display = gr.Code(label="JSON Output", language="json", interactive=False)
+        
+        with gr.Row():
+            gr.Markdown("## Justification & Confidence")
+        with gr.Row():
+            justification_display = gr.Markdown()
 
-        run_btn.click(
-            fn=run_ingestion,
-            inputs=[input_dir],
-            outputs=[output_status]
+        upload_button.change(
+            fn=process_document,
+            inputs=[upload_button],
+            outputs=[image_display, json_display, justification_display]
         )
-    demo.launch(server_port=settings.ui_port)
+
+    demo.launch(server_port=settings.ui_port, share=True)
 
 
 if __name__ == "__main__":

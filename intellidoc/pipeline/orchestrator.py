@@ -6,21 +6,17 @@ import pickle
 from pathlib import Path
 from typing import List, Dict, Any, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import itertools
 
-from localknow.config import settings
-from localknow.core.validators import ContentValidator
-from localknow.core.domain_guardian import ResourceGuardian
-from localknow.core.quality import ValidationEngine
-from localknow.ingestion.parsers import read_any
-from localknow.ingestion.chunker import TextChunker
-from localknow.persist.versioning import VersionTracker
-from localknow.types import Document, Concept
-from localknow.dedup.deduplicator import AdvancedContentDeduplicator
-from localknow.extract.concepts import RobustConceptExtractor
-from localknow.extract.principles import FirstPrinciplesExtractor
-from localknow.extract.controversy import ControversyDetector
-from localknow.graph.builder import HierarchicalKnowledgeBuilder
+from intellidoc.config import settings
+from intellidoc.core.validators import ContentValidator
+from intellidoc.core.domain_guardian import ResourceGuardian
+from intellidoc.ingestion.parsers import read_any
+from intellidoc.persist.versioning import VersionTracker
+from intellidoc.types import Document
+from intellidoc.dedup.deduplicator import AdvancedContentDeduplicator
+from intellidoc.extract.classifier import DocumentClassifier
+from intellidoc.extract.extractor import StructuredDataExtractor
+from intellidoc.extract.schemas import Invoice
 
 
 def build_documents(paths: List[str]) -> List[Document]:
@@ -38,59 +34,40 @@ def build_documents(paths: List[str]) -> List[Document]:
             )
     return docs
 
+def process_document_path(path: str) -> Dict[str, Any]:
+    """Helper function to process a single document from its path."""
+    doc = build_documents([path])[0]
+    return process_single_document(doc)
 
 def process_single_document(doc: Document) -> Dict[str, Any]:
-    """Orchestrates the chunking, extraction, and analysis for a single document."""
+    """Orchestrates the classification and extraction for a single document."""
     try:
-        # Initialize services used per-document
-        concept_extractor = RobustConceptExtractor()
-        principle_extractor = FirstPrinciplesExtractor()
-        controversy_detector = ControversyDetector()
-        quality_engine = ValidationEngine()
-        chunker = TextChunker()
+        # Initialize services
+        classifier = DocumentClassifier()
+        extractor = StructuredDataExtractor()
 
-        # Chunk the document content
-        chunks = chunker.chunk(doc.content)
-        
-        # Process each chunk to extract information
-        chunk_results = []
-        for chunk in chunks:
-            concepts = concept_extractor.extract_with_validation(chunk)
-            if not concepts:
-                continue
-            
-            principles = principle_extractor.extract_foundational_truths(concepts, chunk)
-            controversies = controversy_detector.identify_debates(concepts, chunk)
-            chunk_results.append({
-                "concepts": concepts,
-                "principles": principles,
-                "controversies": controversies
-            })
+        # 1. Classify the document
+        doc_type = classifier.classify(doc.document_id, doc.content)
+        print(f"Document {doc.path} classified as: {doc_type}")
 
-        if not chunk_results:
-            return {"status": "skipped", "reason": "no concepts extracted from any chunk", "doc_id": doc.document_id, "path": doc.path, "content": doc.content}
-
-        # Aggregate results from all chunks
-        all_concepts = list(itertools.chain.from_iterable(r['concepts'] for r in chunk_results))
-        all_principles = list(itertools.chain.from_iterable(r['principles'] for r in chunk_results))
-        all_controversies = list(itertools.chain.from_iterable(r['controversies'] for r in chunk_results))
-        
-        # Deduplicate aggregated results by name/topic
-        unique_concepts = {c.name.lower(): c for c in all_concepts}.values()
-        unique_principles = {p.name.lower(): p for p in all_principles}.values()
-        unique_controversies = {c.topic.lower(): c for c in all_controversies}.values()
-
-        quality_report = quality_engine.calculate_quality(list(unique_concepts))
+        # 2. Extract structured data based on type
+        extracted_data = None
+        if doc_type == "invoice":
+            try:
+                # Pass the original file path for vision-enabled extraction
+                extraction_result = extractor.extract(doc.content, Invoice, image_path=doc.path)
+                extracted_data = extraction_result.dict() if extraction_result else None
+                print(f"Successfully extracted invoice data from {doc.path}")
+            except Exception as e:
+                print(f"Failed to extract invoice data from {doc.path}: {e}")
+                return {"status": "error", "reason": str(e), "doc_id": doc.document_id, "path": doc.path}
 
         return {
             "status": "success",
             "doc_id": doc.document_id,
             "path": doc.path,
-            "content": doc.content, # Return original content for versioning
-            "concepts": list(unique_concepts),
-            "principles": list(unique_principles),
-            "controversies": list(unique_controversies),
-            "quality": quality_report.avg_concept_confidence,
+            "doc_type": doc_type,
+            "extracted_data": extracted_data,
         }
     except Exception as e:
         print(f"Error processing {doc.path}: {e}")
@@ -101,7 +78,7 @@ class CheckpointManager:
     """Manages checkpoints for resumable processing."""
     
     def __init__(self, input_dir: str):
-        self.checkpoint_dir = Path(".localknow/checkpoints")
+        self.checkpoint_dir = Path(".intellidoc/checkpoints")
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_file = self.checkpoint_dir / f"{self._hash_path(input_dir)}.checkpoint"
         
@@ -145,25 +122,14 @@ def main(input_dir: str) -> Dict[str, Any]:
     checkpoint_mgr = CheckpointManager(input_dir)
     checkpoint = checkpoint_mgr.load_checkpoint()
     processed_paths = checkpoint["processed_paths"]
-    summary = checkpoint["results"].get("summary", {"processed": 0, "concepts": 0, "principles": 0, "controversies": 0, "avg_quality": []})
+    summary = checkpoint["results"].get("summary", {"processed": 0, "successful_extractions": 0})
     
     # 1. Initialization
     validator = ContentValidator()
     guardian = ResourceGuardian()
     vt = VersionTracker(settings.sqlite_db_path)
     dedup = AdvancedContentDeduplicator()
-    builder = HierarchicalKnowledgeBuilder()
     
-    # Restore graph state if available
-    if "graph_json" in checkpoint["results"]:
-        try:
-            import networkx as nx
-            graph_data = json.loads(checkpoint["results"]["graph_json"])
-            builder.G = nx.node_link_graph(graph_data)
-            print(f"Restored knowledge graph with {len(builder.G.nodes)} nodes")
-        except Exception as e:
-            print(f"Could not restore graph: {e}")
-
     # 2. Validation and Versioning
     validation_result = validator.validate_folder(input_dir)
     new_or_modified, _ = vt.detect_changes(validation_result.valid_paths, reader=read_any)
@@ -193,18 +159,13 @@ def main(input_dir: str) -> Dict[str, Any]:
     unique_docs = dedup.detect_semantic_duplicates(docs_after_guardian)
     print(f"Documents after deduplication: {len(unique_docs)}")
 
-    # 4. Parallel Extraction and Graph Building with dynamic worker count
-    optimal_workers = min(2, guardian.resource_monitor.get_optimal_workers())  # Force low worker count
-    print(f"Using {optimal_workers} workers based on current system state (limited for safety)")
+    # 4. Parallel Extraction with dynamic worker count
+    optimal_workers = guardian.resource_monitor.get_optimal_workers()
+    # Stability override: Cap workers to prevent LLM instability on high-load systems.
+    stable_workers = min(optimal_workers, 4)
+    print(f"Using {stable_workers} workers (stable cap) based on current system state")
 
-    # Add memory check before processing
-    import psutil
-    mem = psutil.virtual_memory()
-    if mem.percent > 75:
-        print(f"High memory usage ({mem.percent:.1f}%), reducing to single worker")
-        optimal_workers = 1
-    
-    with ThreadPoolExecutor(max_workers=optimal_workers) as executor:
+    with ThreadPoolExecutor(max_workers=stable_workers) as executor:
         future_to_doc = {executor.submit(process_single_document, doc): doc for doc in unique_docs}
         
         # Process results as they complete
@@ -213,45 +174,37 @@ def main(input_dir: str) -> Dict[str, Any]:
             doc_path = result["path"]
 
             if result["status"] == "success":
-                builder.add_concepts(result["concepts"], result["doc_id"])
-                builder.add_principles(result["principles"], result["doc_id"])
-                builder.add_controversies(result["controversies"], result["doc_id"])
-                builder.map_dependencies(result["concepts"], result["principles"])
-
                 summary["processed"] += 1
-                summary["concepts"] += len(result["concepts"])
-                summary["principles"] += len(result["principles"])
-                summary["controversies"] += len(result["controversies"])
-                summary["avg_quality"].append(result["quality"])
+                if result.get("extracted_data"):
+                    summary["successful_extractions"] = summary.get("successful_extractions", 0) + 1
             
             # Record version regardless of outcome to avoid reprocessing errors
-            vt.record_file(result["path"], result["content"])
+            vt.record_file(result["path"], result.get("content", ""))
             
             # Mark as processed and save checkpoint periodically
             processed_paths.add(doc_path)
             if summary["processed"] % 5 == 0:  # Save checkpoint every 5 documents
                 checkpoint_results = {
                     "summary": summary,
-                    "graph_json": builder.to_json()
                 }
                 checkpoint_mgr.save_checkpoint(processed_paths, checkpoint_results)
 
-    final_quality = sum(summary["avg_quality"]) / len(summary["avg_quality"]) if summary["avg_quality"] else 0
-    
     # 5. Final Report
     report = {
         "files_validated": len(validation_result.valid_paths),
         "files_changed": len(new_or_modified),
         "files_processed_after_dedup": len(unique_docs),
-        "concepts_extracted": summary["concepts"],
-        "principles_extracted": summary["principles"],
-        "controversies_found": summary["controversies"],
-        "average_quality_score": round(final_quality, 3),
-        "graph_json": builder.to_json(),
+        "successful_extractions": summary.get("successful_extractions", 0),
     }
     
     # Clear checkpoint after successful completion
     checkpoint_mgr.clear_checkpoint()
+    
+    # Save the final report to a JSON file
+    output_filename = "extraction_report.json"
+    with open(output_filename, 'w', encoding='utf-8') as f:
+        json.dump(report, f, indent=4)
+    print(f"\n--- SUCCESS: Report saved to {output_filename} ---\n")
     
     print("Pipeline finished. Report:", report)
     return report

@@ -4,10 +4,10 @@ import time
 import platform
 from typing import List, Dict, Any, Tuple
 
-from localknow.config import settings
-from localknow.types import Document, ProcessingPlan
-from localknow.models.ollama_client import OllamaClient
-from localknow.models.prompts import DOMAIN_CLASSIFICATION_PROMPT
+from intellidoc.config import settings
+from intellidoc.types import Document, ProcessingPlan
+from intellidoc.models.ollama_client import OllamaClient
+from intellidoc.models.prompts import DOMAIN_CLASSIFICATION_PROMPT
 
 # Domain categories based on expected LLM success rates
 HIGH_SUCCESS_DOMAINS = {"technical", "computer_science", "mathematics", "physics", "engineering"}
@@ -133,6 +133,6 @@ class ResourceGuardian:
                     plan.add_limited_processing(doc.path)
                 else:
                     plan.add_full_processing(doc.path)
-            else:
-                plan.add_skip_processing(doc.path, reason=f"Low success domain: {domain}")
+            else: # Defaults to full processing for LOW_SUCCESS_DOMAINS or "unknown"
+                plan.add_full_processing(doc.path)
         return plan 

@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ModelConfig(BaseSettings):
-    primary_model: str = "qwen2.5:7b"
+    primary_model: str = "llava:7b"  # Vision-enabled model for extraction
     validation_model: str = "phi3:mini"
     reasoning_model: str = "deepseek-r1:8b"
 
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Storage
     chroma_db_dir: str = Field(default=".chroma", alias="CHROMA_DB_DIR")
-    sqlite_db_path: str = Field(default=".localknow/content_versions.db", alias="SQLITE_DB_PATH")
+    sqlite_db_path: str = Field(default=".intellidoc/content_versions.db", alias="SQLITE_DB_PATH")
 
     # Processing
     similarity_threshold: float = Field(default=0.85, alias="SIMILARITY_THRESHOLD")

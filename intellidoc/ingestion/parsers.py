@@ -7,39 +7,87 @@ import pymupdf
 import pandas as pd
 from docx import Document as DocxDocument
 import markdown
+import cv2
+import easyocr
+import numpy as np
+
+from intellidoc.preprocessing.image_utils import preprocess_image
+
+# Initialize the OCR reader once to avoid reloading the model
+# Using ['en'] for English, and gpu=True will automatically use CUDA or MPS if available
+ocr_reader = easyocr.Reader(['en'], gpu=True)
+
+def read_image_with_ocr(path: str) -> str:
+    """Reads an image, preprocesses it, and extracts text using OCR."""
+    try:
+        # Preprocess the image to improve OCR accuracy
+        processed_image_np = preprocess_image(path)
+        
+        # Use EasyOCR to extract text
+        # detail=0 means we only want the extracted text, not bounding boxes
+        result = ocr_reader.readtext(processed_image_np, detail=0, paragraph=True)
+        
+        return "\n".join(result)
+    except Exception as e:
+        print(f"Error processing image {path} with OCR: {e}")
+        return ""
 
 def read_pdf_streaming(path: str, max_pages: int = 50) -> str:
-    """Read PDF with page limits to prevent memory exhaustion."""
+    """
+    Read PDF with page limits. Tries to extract text directly,
+    falls back to OCR if the document appears to be scanned.
+    """
     try:
         doc = pymupdf.open(path)
         total_pages = len(doc)
-        
-        # Limit pages to prevent memory issues
         pages_to_read = min(max_pages, total_pages)
         
-        print(f"PDF has {total_pages} pages, reading first {pages_to_read} pages")
+        print(f"PDF has {total_pages} pages, processing first {pages_to_read} pages")
         
         text_parts = []
+        is_scanned = False
+        
+        # First pass: try to extract text directly
         for page_num in range(pages_to_read):
-            try:
+            page = doc[page_num]
+            text = page.get_text()
+            if text.strip():
+                text_parts.append(text)
+        
+        full_text = "\n\n".join(text_parts)
+
+        # If direct text extraction yields very little, assume it's a scanned PDF
+        if len(full_text.strip()) < 100 * pages_to_read:
+            print(f"PDF {path} appears to be scanned. Falling back to OCR.")
+            is_scanned = True
+            text_parts = [] # Reset text parts for OCR
+        
+        if is_scanned:
+            for page_num in range(pages_to_read):
                 page = doc[page_num]
-                text = page.get_text()
-                if text.strip():  # Only add non-empty pages
-                    text_parts.append(text)
-            except Exception as e:
-                print(f"Error reading page {page_num}: {e}")
-                continue
+                pix = page.get_pixmap(dpi=300) # Render page as a high-DPI image
+                img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                
+                # Convert to BGR for OpenCV
+                if pix.n == 4: # RGBA
+                    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+                elif pix.n == 1: # Grayscale
+                    img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+
+                # Use EasyOCR on the image buffer
+                result = ocr_reader.readtext(img_np, detail=0, paragraph=True)
+                text_parts.append("\n".join(result))
         
         doc.close()
         
-        full_text = "\n\n".join(text_parts)
+        final_text = "\n\n--- Page Break ---\n\n".join(text_parts)
         
         # Additional safety check
-        if len(full_text) > 1_000_000:  # 1MB text limit
-            print(f"Text too long ({len(full_text)} chars), truncating to 1MB")
-            full_text = full_text[:1_000_000]
+        if len(final_text) > 1_000_000:  # 1MB text limit
+            print(f"Text too long ({len(final_text)} chars), truncating to 1MB")
+            final_text = final_text[:1_000_000]
             
-        return full_text
+        return final_text
         
     except Exception as e:
         print(f"Error reading PDF {path}: {e}")
@@ -115,6 +163,9 @@ def read_any(path: str) -> Optional[str]:
         '.md': read_md,
         '.csv': read_csv,
         '.docx': read_docx,
+        '.png': read_image_with_ocr,
+        '.jpg': read_image_with_ocr,
+        '.jpeg': read_image_with_ocr,
     }
     
     reader = readers.get(ext)
