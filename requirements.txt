@@ -1,0 +1,32 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+# UI
+gradio==4.44.0
+# Config
+python-dotenv==1.0.1
+pydantic-settings==2.10.1
+# NLP / Embeddings
+torch>=2.1.0  # For Apple Silicon MPS support
+sentence-transformers==3.0.1
+chromadb==0.5.5
+numpy==1.26.4
+scikit-learn==1.5.1
+networkx==3.3
+# Storage
+SQLAlchemy==2.0.32
+sqlite-utils==3.36
+# Local LLMs
+ollama==0.3.2
+# Parsers
+pymupdf==1.24.9
+python-docx==1.1.2
+markdown==3.6
+pandas==2.2.2
+# Utils
+requests==2.32.3
+tqdm==4.66.4
+click==8.1.7
+psutil==5.9.8
+neo4j==5.22.0
+# Apple Silicon optimization
+accelerate>=0.25.0  # For optimized model loading 
